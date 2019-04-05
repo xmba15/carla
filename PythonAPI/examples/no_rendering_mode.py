@@ -583,6 +583,37 @@ class MapImage(object):
                     world_to_pixel(x) for x in [
                         left, start, right]], 4)
 
+        def draw_crosswalk(surface, transform=None, color=COLOR_ALUMINIUM_2):
+            # Given two points A and B, draw white parallel lines from A to B
+            a = carla.Location(0.0, 0.0, 0.0)
+            b = carla.Location(10.0, 10.0, 0.0)
+
+            ab = b - a
+            length_ab = math.sqrt(ab.x**2 + ab.y**2)
+            unit_ab = ab / length_ab
+            unit_perp_ab = carla.Location(-unit_ab.y, unit_ab.x, 0.0)
+
+            # Crosswalk lines params
+            space_between_lines = 0.5
+            line_width = 0.7
+            line_height = 2
+
+            current_length = 0
+            while current_length < length_ab:
+
+                center = a + unit_ab * current_length
+
+                width_offset = unit_ab * line_width
+                height_offset = unit_perp_ab * line_height
+                list_point = [center - width_offset - height_offset,
+                                center + width_offset - height_offset,
+                                center + width_offset + height_offset,
+                                center - width_offset + height_offset]
+
+                list_point = [world_to_pixel(p) for p in list_point]
+                pygame.draw.polygon(surface, color, list_point)
+                current_length += (line_width + space_between_lines) * 2
+
         def draw_traffic_signs(surface, font_surface, actor, color=COLOR_ALUMINIUM_2, trigger_color=COLOR_PLUM_0):
             transform = actor.get_transform()
             waypoint = carla_map.get_waypoint(transform.location)
@@ -614,6 +645,40 @@ class MapImage(object):
             transform.rotation.yaw += 90
             return transform.location + shift * transform.get_forward_vector()
 
+        def draw_shoulder(waypoints, is_left):
+            shoulder = []
+            s = None
+            PARKING_COLOR = COLOR_ALUMINIUM_4_5
+            SHOULDER_COLOR = COLOR_ALUMINIUM_5
+
+            final_color = SHOULDER_COLOR
+
+            for w in waypoints:
+                if is_left:
+                    s = w.get_left_lane()
+                else:
+                    s = w.get_right_lane()
+                if s is not None and (
+                        s.lane_type == carla.LaneType.Shoulder or s.lane_type == carla.LaneType.Parking):
+                    if s.lane_type == carla.LaneType.Parking:
+                        final_color = PARKING_COLOR
+                    shoulder.append(s)
+
+            shoulder_left_side = [lateral_shift(w.transform, -w.lane_width * 0.5) for w in shoulder]
+            shoulder_right_side = [lateral_shift(w.transform, w.lane_width * 0.5) for w in shoulder]
+
+            polygon = shoulder_left_side + [x for x in reversed(shoulder_right_side)]
+            polygon = [world_to_pixel(x) for x in polygon]
+
+            if len(polygon) > 2:
+                pygame.draw.polygon(map_surface, final_color, polygon, 5)
+                pygame.draw.polygon(map_surface, final_color, polygon)
+
+            draw_lane_marking(
+                map_surface,
+                shoulder,
+                is_left)
+
         def draw_topology(carla_topology, index):
             topology = [x[index] for x in carla_topology]
             topology = sorted(topology, key=lambda w: w.transform.location.z)
@@ -643,61 +708,9 @@ class MapImage(object):
                     pygame.draw.polygon(map_surface, COLOR_ALUMINIUM_5, polygon, 5)
                     pygame.draw.polygon(map_surface, COLOR_ALUMINIUM_5, polygon)
 
-                # Draw Shoulders and Parkings
-                PARKING_COLOR = COLOR_ALUMINIUM_4_5
-                SHOULDER_COLOR = COLOR_ALUMINIUM_5
-
-                final_color = SHOULDER_COLOR
-
-                # Draw Right
-                shoulder = []
-                for w in waypoints:
-                    r = w.get_right_lane()
-                    if r is not None and (
-                            r.lane_type == carla.LaneType.Shoulder or r.lane_type == carla.LaneType.Parking):
-                        if r.lane_type == carla.LaneType.Parking:
-                            final_color = PARKING_COLOR
-                        shoulder.append(r)
-
-                shoulder_left_side = [lateral_shift(w.transform, -w.lane_width * 0.5) for w in shoulder]
-                shoulder_right_side = [lateral_shift(w.transform, w.lane_width * 0.5) for w in shoulder]
-
-                polygon = shoulder_left_side + [x for x in reversed(shoulder_right_side)]
-                polygon = [world_to_pixel(x) for x in polygon]
-
-                if len(polygon) > 2:
-                    pygame.draw.polygon(map_surface, final_color, polygon, 5)
-                    pygame.draw.polygon(map_surface, final_color, polygon)
-
-                draw_lane_marking(
-                    map_surface,
-                    shoulder,
-                    False)
-
-                # Draw Left
-                shoulder = []
-                for w in waypoints:
-                    r = w.get_left_lane()
-                    if r is not None and (
-                            r.lane_type == carla.LaneType.Shoulder or r.lane_type == carla.LaneType.Parking):
-                        if r.lane_type == carla.LaneType.Parking:
-                            final_color = PARKING_COLOR
-                        shoulder.append(r)
-
-                shoulder_left_side = [lateral_shift(w.transform, -w.lane_width * 0.5) for w in shoulder]
-                shoulder_right_side = [lateral_shift(w.transform, w.lane_width * 0.5) for w in shoulder]
-
-                polygon = shoulder_left_side + [x for x in reversed(shoulder_right_side)]
-                polygon = [world_to_pixel(x) for x in polygon]
-
-                if len(polygon) > 2:
-                    pygame.draw.polygon(map_surface, final_color, polygon, 5)
-                    pygame.draw.polygon(map_surface, final_color, polygon)
-
-                draw_lane_marking(
-                    map_surface,
-                    shoulder,
-                    True)
+                # Draw Right and Left Shoulders and Parkings
+                draw_shoulder(waypoints, True)
+                draw_shoulder(waypoints, False)
 
                 # Draw Lane Markings and Arrows
                 if not waypoint.is_intersection:
@@ -759,6 +772,8 @@ class MapImage(object):
 
         for ts_yield in yields:
             draw_traffic_signs(map_surface, yield_font_surface, ts_yield, trigger_color=COLOR_ORANGE_1)
+
+        # draw_crosswalk(map_surface)
 
     def world_to_pixel(self, location, offset=(0, 0)):
         x = self.scale * self._pixels_per_meter * (location.x - self._world_offset[0])
